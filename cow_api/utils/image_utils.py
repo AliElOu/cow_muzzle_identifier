@@ -16,7 +16,7 @@ def load_and_preprocess_image(img_np):
 
     
 def detect_muzzle(image, conf=0.3):
-    results = yolo_model(image, conf)
+    results = list(yolo_model(image, conf=conf))
     boxes = results[0].boxes
     if boxes is not None and len(boxes) > 0:
         box = boxes[0]

@@ -15,25 +15,46 @@ database = load_database(db_path)
 async def add_cow(cow_id: str = Form(...), images: list[UploadFile] = File(...)):
     global database
     embeddings = []
-    
+
     cow_folder = f"cow_data/{cow_id}"
     os.makedirs(cow_folder, exist_ok=True)
 
     for img_file in images:
         img_path = os.path.join(cow_folder, img_file.filename)
+
+        # Sauvegarder temporairement l'image reçue
         with open(img_path, "wb") as buffer:
             shutil.copyfileobj(img_file.file, buffer)
 
-        img_tensor = load_and_preprocess_image(img_path)
+        # Lire l'image avec OpenCV
+        img_cv = cv2.imread(img_path)
+
+        # Détection du museau
+        muzzle_img = detect_muzzle(img_cv, 0.1)
+        if muzzle_img is None:
+            continue  # Ignorer les images sans museau détecté
+        # Prétraitement + embedding
+        cropped_name = f"cropped_{img_file.filename}"
+        cropped_path = os.path.join(cow_folder, cropped_name)
+        cv2.imwrite(cropped_path, muzzle_img)
+
+        img_tensor = load_and_preprocess_image(muzzle_img)
         emb = get_embedding(img_tensor)
         embeddings.append(emb)
 
-    avg_embedding = np.mean(embeddings, axis=0)
-    database["labels"].append(cow_id)
-    database["embeddings"].append(avg_embedding)
-    save_database(database, db_path)
+    if len(embeddings) == 0:
+        return JSONResponse(status_code=400, content={"error": "Aucune image valide (museau non détecté)."})
 
-    return {"message": f"✅ Vache {cow_id} ajoutée avec {len(images)} images."}
+    # Moyenne des embeddings
+    # avg_embedding = np.mean(embeddings, axis=0)
+    # database["labels"].append(cow_id)
+    # database["embeddings"].append(avg_embedding)
+    # save_database(database, db_path)
+
+    return {
+        "message": f"✅ Vache {cow_id} ajoutée avec {len(embeddings)} images valides (museau détecté)."
+    }
+
 
 
 @app.post("/predict")

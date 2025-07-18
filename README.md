@@ -8,8 +8,8 @@ Ce projet détecte le museau d'une vache (YOLOv8) et identifie la vache à parti
 - `identification/`: identification des vaches à partir du museau
 - `utils/`: fonctions utilitaires
 - `test_images/`: images pour les tests
-
+- `cow_api/`: la présentation des modèles de détéction et d'identification sous forme d'un api
 ## 🚀 Utilisation
-
+En cours de développement ....
 ```bash
 
