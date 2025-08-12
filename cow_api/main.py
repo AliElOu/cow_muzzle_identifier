@@ -4,7 +4,8 @@ import os
 import shutil
 import numpy as np
 from utils.image_utils import load_and_preprocess_image, detect_muzzle
-from utils.embeddings import load_database, save_database, get_embedding, predict_identity
+from utils.embeddings import get_embedding, predict_identity
+from utils.s3_database import db_manager, load_database, save_database
 from utils.aws_utils import S3Manager
 import cv2
 import logging
@@ -17,8 +18,10 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 
 app = FastAPI()
-db_path = "utils/embedding_database.json"
-database = load_database(db_path)
+
+# Charger la base de données depuis S3 au démarrage
+database = load_database()
+logging.info(f"Base de données chargée avec {len(database.get('labels', []))} vaches")
 
 # Initialisation du gestionnaire S3
 s3_manager = S3Manager()
@@ -104,17 +107,22 @@ async def add_cow(cow_id: str = Form(...)):
                 "images_found": len(s3_images)
             })
 
-        # Moyenne des embeddings
-        # avg_embedding = np.mean(embeddings, axis=0)
-        # database["labels"].append(cow_id)
-        # database["embeddings"].append(avg_embedding)
-        # save_database(database, db_path)
-
+        # Moyenne des embeddings et sauvegarde dans la base de données S3
+        avg_embedding = np.mean(embeddings, axis=0)
+        database["labels"].append(cow_id)
+        database["embeddings"].append(avg_embedding.tolist())
+        
+        # Sauvegarder sur S3
+        save_success = save_database(database)
+        
         return {
             "message": f"✅ Vache {cow_id} ajoutée avec {len(embeddings)} images valides (museau détecté).",
             "images_found_in_s3": len(s3_images),
             "images_with_muzzle_detected": len(embeddings),
             "embeddings_extracted": len(embeddings),
+            "muzzle_images_saved_to": muzzle_folder,
+            "muzzle_files_count": muzzle_count,
+            "database_saved_to_s3": save_success
         }
 
     except Exception as e:
@@ -208,12 +216,66 @@ async def health_check():
     except Exception as e:
         s3_status = f"ERROR: {str(e)}"
     
+    # Informations sur la base de données
+    db_info = db_manager.get_database_info()
+    
     return {
         "api_status": "OK",
         "s3_status": s3_status,
         "bucket_name": s3_manager.bucket_name,
-        "database_loaded": len(database.get("labels", [])) > 0
+        "database_loaded": len(database.get("labels", [])) > 0,
+        "database_info": db_info,
+        "total_cows_in_database": len(database.get("labels", []))
     }
+
+
+@app.get("/database/info")
+async def get_database_info():
+    """Informations détaillées sur la base de données"""
+    db_info = db_manager.get_database_info()
+    
+    return {
+        "total_cows": len(database.get("labels", [])),
+        "cow_ids": database.get("labels", []),
+        "storage_location": f"s3://{db_manager.bucket_name}/{db_manager.db_key}",
+        "local_cache": db_manager.local_cache,
+        "database_details": db_info
+    }
+
+
+@app.post("/database/backup")
+async def create_database_backup():
+    """Créer une sauvegarde manuelle de la base de données"""
+    backup_key = db_manager.backup_database()
+    if backup_key:
+        return {
+            "message": "Backup créé avec succès",
+            "backup_location": f"s3://{db_manager.bucket_name}/{backup_key}",
+            "backup_key": backup_key
+        }
+    else:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Échec de la création du backup"}
+        )
+
+
+@app.post("/database/reload")
+async def reload_database():
+    """Recharge la base de données depuis S3"""
+    global database
+    try:
+        database = load_database()
+        return {
+            "message": "Base de données rechargée depuis S3",
+            "total_cows": len(database.get("labels", [])),
+            "cow_ids": database.get("labels", [])
+        }
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Erreur lors du rechargement: {str(e)}"}
+        )
 
 
 if __name__ == "__main__":
