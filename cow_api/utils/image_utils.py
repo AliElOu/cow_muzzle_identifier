@@ -4,7 +4,7 @@ import cv2
 from ultralytics import YOLO
 from PIL import Image
 
-yolo_model = YOLO("utils/best.pt")
+yolo_model = YOLO("utils/new.pt")
 
 
 def load_and_preprocess_image(img_np):

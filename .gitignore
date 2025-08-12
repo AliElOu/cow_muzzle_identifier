@@ -215,3 +215,7 @@ __marimo__/
 *.h5
 *.keras
 *.json
+*.ipynb
+*.jpg
+*.jpeg
+*.png

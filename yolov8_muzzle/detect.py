@@ -11,7 +11,7 @@ for i,image_name in enumerate(os.listdir(images_dir)):
     img_path = os.path.join(images_dir, image_name)
     image = cv2.imread(img_path)
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    results = model(img_path, conf=0.7)
+    results = model(img_path, conf=0.2)
     save_dir = "./yolov8_muzzle/results"
     os.makedirs(save_dir, exist_ok=True)
     boxes = results[0].boxes

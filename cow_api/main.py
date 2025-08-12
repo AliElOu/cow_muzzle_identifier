@@ -5,55 +5,123 @@ import shutil
 import numpy as np
 from utils.image_utils import load_and_preprocess_image, detect_muzzle
 from utils.embeddings import load_database, save_database, get_embedding, predict_identity
+from utils.aws_utils import S3Manager
 import cv2
+import logging
+from dotenv import load_dotenv
+
+# Charger les variables d'environnement
+load_dotenv()
+
+# Configuration des logs
+logging.basicConfig(level=logging.INFO)
 
 app = FastAPI()
 db_path = "utils/embedding_database.json"
 database = load_database(db_path)
 
+# Initialisation du gestionnaire S3
+s3_manager = S3Manager()
+
+# Créer le bucket S3 si nécessaire au démarrage
+try:
+    s3_manager.create_bucket_if_not_exists()
+except Exception as e:
+    logging.error(f"Impossible d'initialiser S3: {e}")
+    # L'application peut continuer, mais les uploads échoueront
+
 @app.post("/add-cow")
-async def add_cow(cow_id: str = Form(...), images: list[UploadFile] = File(...)):
+async def add_cow(cow_id: str = Form(...)):
     global database
     embeddings = []
 
-    cow_folder = f"cow_data/{cow_id}"
-    os.makedirs(cow_folder, exist_ok=True)
+    try:
+        # Récupérer la liste des images depuis S3 pour cette vache
+        s3_images = s3_manager.list_cow_raw_images(cow_id)
+        
+        if not s3_images:
+            return JSONResponse(status_code=404, content={
+                "error": f"Aucune image trouvée pour la vache {cow_id} dans le bucket S3."
+            })
 
-    for img_file in images:
-        img_path = os.path.join(cow_folder, img_file.filename)
+        logging.info(f"Traitement de {len(s3_images)} images pour la vache {cow_id}")
 
-        # Sauvegarder temporairement l'image reçue
-        with open(img_path, "wb") as buffer:
-            shutil.copyfileobj(img_file.file, buffer)
+        # Créer un dossier temporaire local pour le traitement
+        temp_folder = f"temp_processing_{cow_id}"
+        os.makedirs(temp_folder, exist_ok=True)
+        
+        # Créer un dossier local pour sauvegarder les museaux détectés
+        muzzle_folder = f"muzzle_images/{cow_id}"
+        os.makedirs(muzzle_folder, exist_ok=True)
 
-        # Lire l'image avec OpenCV
-        img_cv = cv2.imread(img_path)
+        try:
+            muzzle_count = 0
+            for i, s3_image_key in enumerate(s3_images):
+                # Télécharger l'image depuis S3
+                local_image_path = os.path.join(temp_folder, f"image_{i}.jpg")
+                success = s3_manager.download_image(s3_image_key, local_image_path)
+                
+                if not success:
+                    logging.warning(f"Échec du téléchargement de {s3_image_key}")
+                    continue
 
-        # Détection du museau
-        muzzle_img = detect_muzzle(img_cv, 0.1)
-        if muzzle_img is None:
-            continue  # Ignorer les images sans museau détecté
-        # Prétraitement + embedding
-        cropped_name = f"cropped_{img_file.filename}"
-        cropped_path = os.path.join(cow_folder, cropped_name)
-        cv2.imwrite(cropped_path, muzzle_img)
+                # Charger et traiter l'image
+                img_cv = cv2.imread(local_image_path)
+                if img_cv is None:
+                    logging.warning(f"Impossible de charger l'image {local_image_path}")
+                    continue
 
-        img_tensor = load_and_preprocess_image(muzzle_img)
-        emb = get_embedding(img_tensor)
-        embeddings.append(emb)
+                # Détecter le museau
+                muzzle_img = detect_muzzle(img_cv, 0.1)
+                if muzzle_img is None:
+                    logging.info(f"Museau non détecté dans l'image {s3_image_key}")
+                    continue
 
-    if len(embeddings) == 0:
-        return JSONResponse(status_code=400, content={"error": "Aucune image valide (museau non détecté)."})
+                # Sauvegarder l'image du museau localement
+                muzzle_filename = f"muzzle_{cow_id}_{muzzle_count:03d}.jpg"
+                muzzle_path = os.path.join(muzzle_folder, muzzle_filename)
+                cv2.imwrite(muzzle_path, muzzle_img)
+                muzzle_count += 1
+                logging.info(f"Museau sauvegardé: {muzzle_path}")
 
-    # Moyenne des embeddings
-    # avg_embedding = np.mean(embeddings, axis=0)
-    # database["labels"].append(cow_id)
-    # database["embeddings"].append(avg_embedding)
-    # save_database(database, db_path)
+                # Traitement pour les embeddings seulement (pas de sauvegarde)
+                img_tensor = load_and_preprocess_image(muzzle_img)
+                emb = get_embedding(img_tensor)
+                embeddings.append(emb)
+                logging.info(f"Embedding extrait de {s3_image_key}")
 
-    return {
-        "message": f"✅ Vache {cow_id} ajoutée avec {len(embeddings)} images valides (museau détecté)."
-    }
+        finally:
+            # Nettoyage du dossier temporaire local
+            try:
+                shutil.rmtree(temp_folder)
+                logging.info(f"Dossier temporaire {temp_folder} supprimé")
+            except Exception as e:
+                logging.warning(f"Impossible de supprimer le dossier temporaire {temp_folder}: {e}")
+
+        if len(embeddings) == 0:
+            return JSONResponse(status_code=400, content={
+                "error": "Aucune image valide (museau non détecté) trouvée.",
+                "images_found": len(s3_images)
+            })
+
+        # Moyenne des embeddings
+        # avg_embedding = np.mean(embeddings, axis=0)
+        # database["labels"].append(cow_id)
+        # database["embeddings"].append(avg_embedding)
+        # save_database(database, db_path)
+
+        return {
+            "message": f"✅ Vache {cow_id} ajoutée avec {len(embeddings)} images valides (museau détecté).",
+            "images_found_in_s3": len(s3_images),
+            "images_with_muzzle_detected": len(embeddings),
+            "embeddings_extracted": len(embeddings),
+        }
+
+    except Exception as e:
+        logging.error(f"Erreur lors du traitement de la vache {cow_id}: {e}")
+        return JSONResponse(status_code=500, content={
+            "error": f"Erreur lors du traitement: {str(e)}"
+        })
 
 
 
@@ -83,3 +151,76 @@ async def predict(image: UploadFile = File(...)):
         "score": float(score)
     })
 
+
+@app.get("/cow/{cow_id}/raw-images")
+async def get_cow_raw_images(cow_id: str):
+    """Récupère la liste des images brutes d'une vache stockées sur S3"""
+    try:
+        raw_keys = s3_manager.list_cow_raw_images(cow_id)
+        raw_urls = [f"https://{s3_manager.bucket_name}.s3.{s3_manager.region_name}.amazonaws.com/{key}" for key in raw_keys]
+        return {
+            "cow_id": cow_id,
+            "raw_images_count": len(raw_urls),
+            "s3_urls": raw_urls
+        }
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Erreur lors de la récupération des images brutes: {str(e)}"}
+        )
+
+
+@app.get("/cow/{cow_id}/muzzle-images")
+async def get_cow_muzzle_images(cow_id: str):
+    """Récupère la liste des images de museaux sauvegardées localement"""
+    muzzle_folder = f"muzzle_images/{cow_id}"
+    
+    if not os.path.exists(muzzle_folder):
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"Aucune image de museau trouvée pour la vache {cow_id}"}
+        )
+    
+    try:
+        muzzle_files = [f for f in os.listdir(muzzle_folder) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+        muzzle_files.sort()  # Tri par nom
+        
+        return {
+            "cow_id": cow_id,
+            "muzzle_images_count": len(muzzle_files),
+            "muzzle_folder": muzzle_folder,
+            "muzzle_files": muzzle_files
+        }
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Erreur lors de la lecture du dossier: {str(e)}"}
+        )
+
+
+@app.get("/health")
+async def health_check():
+    """Vérification de l'état de l'API et de la connectivité S3"""
+    try:
+        # Test de connectivité S3
+        s3_manager.s3_client.head_bucket(Bucket=s3_manager.bucket_name)
+        s3_status = "OK"
+    except Exception as e:
+        s3_status = f"ERROR: {str(e)}"
+    
+    return {
+        "api_status": "OK",
+        "s3_status": s3_status,
+        "bucket_name": s3_manager.bucket_name,
+        "database_loaded": len(database.get("labels", [])) > 0
+    }
+
+
+if __name__ == "__main__":
+        import uvicorn
+        uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True
+    )
