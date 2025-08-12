@@ -1,5 +1,6 @@
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import os
 import shutil
 import numpy as np
@@ -18,6 +19,15 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 
 app = FastAPI()
+
+# Configuration CORS
+app.add_middleware( 
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Charger la base de données depuis S3 au démarrage
 database = load_database()
