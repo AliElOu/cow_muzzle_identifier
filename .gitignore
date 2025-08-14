@@ -207,7 +207,6 @@ marimo/_lsp/
 __marimo__/
 
 # Yolo Weight + pretrained models
-*.pt
 *.pth
 *.ckpt
 
