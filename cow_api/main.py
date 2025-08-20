@@ -11,6 +11,7 @@ from utils.aws_utils import S3Manager
 import cv2
 import logging
 from dotenv import load_dotenv
+from datetime import datetime
 
 # Charger les variables d'environnement
 load_dotenv()
@@ -35,6 +36,9 @@ logging.info(f"Base de données chargée avec {len(database.get('labels', []))} 
 
 # Initialisation du gestionnaire S3
 s3_manager = S3Manager()
+
+# Créer les dossiers nécessaires pour la sauvegarde des prédictions
+os.makedirs("prediction_results", exist_ok=True)
 
 # Créer le bucket S3 si nécessaire au démarrage
 try:
@@ -159,14 +163,41 @@ async def predict(image: UploadFile = File(...)):
     if muzzle_img is None:
         return JSONResponse({
             "prediction": "MUSEAU NON DÉTECTÉ",
-            "score": 0
+            "score": 0,
+            "muzzle_saved": False
         })
+    
+    # Générer un nom de fichier unique avec timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]  # microseconds tronquées
+    muzzle_filename = f"prediction_{timestamp}_{filename_only}"
+    muzzle_save_path = os.path.join("prediction_results", muzzle_filename)
+    
+    # Sauvegarder l'image du museau détecté
+    cv2.imwrite(muzzle_save_path, muzzle_img)
+    logging.info(f"Museau détecté sauvegardé: {muzzle_save_path}")
+    
     img_tensor = load_and_preprocess_image(muzzle_img)
     label, score = predict_identity(img_tensor, database)
 
+    # Gestion du cas où la base de données est vide
+    if label == "BASE_VIDE":
+        return JSONResponse({
+            "prediction": "BASE DE DONNÉES VIDE",
+            "score": 0.0,
+            "muzzle_saved": True,
+            "muzzle_save_path": muzzle_save_path,
+            "original_filename": filename_only,
+            "message": "Aucune vache enregistrée dans la base de données. Ajoutez des vaches avec /add-cow avant de faire des prédictions.",
+            "total_cows_in_database": len(database.get("labels", []))
+        })
+
     return JSONResponse({
         "prediction": label,
-        "score": float(score)
+        "score": float(score),
+        "muzzle_saved": True,
+        "muzzle_save_path": muzzle_save_path,
+        "original_filename": filename_only,
+        "total_cows_in_database": len(database.get("labels", []))
     })
 
 
@@ -213,6 +244,117 @@ async def get_cow_muzzle_images(cow_id: str):
         return JSONResponse(
             status_code=500,
             content={"error": f"Erreur lors de la lecture du dossier: {str(e)}"}
+        )
+
+
+@app.delete("/cow/{cow_id}")
+async def delete_cow(cow_id: str):
+    """Supprime une vache et toutes ses images de la base de données d'embeddings"""
+    global database
+    
+    try:
+        # Vérifier si la vache existe dans la base de données
+        labels = database.get("labels", [])
+        embeddings = database.get("embeddings", [])
+        
+        if cow_id not in labels:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"Vache {cow_id} non trouvée dans la base de données"}
+            )
+        
+        # Trouver l'index de la vache dans la base de données
+        cow_index = labels.index(cow_id)
+        
+        # Créer une sauvegarde avant suppression
+        backup_key = db_manager.backup_database()
+        if not backup_key:
+            logging.warning("Impossible de créer une sauvegarde avant suppression")
+        
+        # Supprimer la vache et son embedding de la base de données
+        labels.pop(cow_index)
+        embeddings.pop(cow_index)
+        
+        # Mettre à jour la base de données globale
+        database["labels"] = labels
+        database["embeddings"] = embeddings
+        
+        # Sauvegarder la base de données mise à jour
+        save_success = save_database(database)
+        
+        # Supprimer le dossier local des images de museaux s'il existe
+        muzzle_folder = f"muzzle_images/{cow_id}"
+        muzzle_files_deleted = 0
+        if os.path.exists(muzzle_folder):
+            try:
+                # Compter les fichiers avant suppression
+                muzzle_files = [f for f in os.listdir(muzzle_folder) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+                muzzle_files_deleted = len(muzzle_files)
+                
+                # Supprimer le dossier et son contenu
+                shutil.rmtree(muzzle_folder)
+                logging.info(f"Dossier de museaux {muzzle_folder} supprimé avec {muzzle_files_deleted} fichiers")
+            except Exception as e:
+                logging.warning(f"Impossible de supprimer le dossier {muzzle_folder}: {e}")
+        
+        return {
+            "message": f"✅ Vache {cow_id} supprimée avec succès",
+            "cow_id": cow_id,
+            "embedding_removed": True,
+            "database_saved_to_s3": save_success,
+            "backup_created": backup_key is not None,
+            "backup_location": f"s3://{db_manager.bucket_name}/{backup_key}" if backup_key else None,
+            "muzzle_folder_deleted": os.path.exists(f"muzzle_images/{cow_id}") == False,
+            "muzzle_files_deleted": muzzle_files_deleted,
+            "remaining_cows_in_database": len(database.get("labels", []))
+        }
+        
+    except Exception as e:
+        logging.error(f"Erreur lors de la suppression de la vache {cow_id}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": f"Erreur lors de la suppression: {str(e)}",
+                "cow_id": cow_id
+            }
+        )
+
+
+@app.get("/cows")
+async def list_all_cows():
+    """Liste toutes les vaches présentes dans la base de données d'embeddings"""
+    try:
+        labels = database.get("labels", [])
+        embeddings = database.get("embeddings", [])
+        
+        cows_info = []
+        for i, cow_id in enumerate(labels):
+            # Vérifier si le dossier de museaux existe localement
+            muzzle_folder = f"muzzle_images/{cow_id}"
+            muzzle_files_count = 0
+            if os.path.exists(muzzle_folder):
+                muzzle_files = [f for f in os.listdir(muzzle_folder) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+                muzzle_files_count = len(muzzle_files)
+            
+            cows_info.append({
+                "cow_id": cow_id,
+                "index": i,
+                "has_embedding": i < len(embeddings),
+                "muzzle_folder_exists": os.path.exists(muzzle_folder),
+                "muzzle_files_count": muzzle_files_count
+            })
+        
+        return {
+            "total_cows": len(labels),
+            "cows": cows_info,
+            "database_status": "loaded" if len(labels) > 0 else "empty"
+        }
+        
+    except Exception as e:
+        logging.error(f"Erreur lors de la récupération de la liste des vaches: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Erreur lors de la récupération: {str(e)}"}
         )
 
 

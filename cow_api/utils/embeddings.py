@@ -31,6 +31,14 @@ def get_embedding(img_tensor):
 
 # Identifier
 def predict_identity(img_tensor, database, threshold=0.7):
+    # Vérifier si la base de données contient des embeddings
+    if not database.get("embeddings") or len(database["embeddings"]) == 0:
+        return "BASE_VIDE", 0.0
+    
+    # Vérifier si la base de données contient des labels
+    if not database.get("labels") or len(database["labels"]) == 0:
+        return "BASE_VIDE", 0.0
+    
     query_emb = get_embedding(img_tensor)
     sims = cosine_similarity([query_emb], database["embeddings"])[0]
     best_score = np.max(sims)
