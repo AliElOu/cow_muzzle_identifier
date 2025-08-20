@@ -147,16 +147,51 @@ async def add_cow(cow_id: str = Form(...)):
 
 
 
-@app.post("/predict")
-async def predict(image: UploadFile = File(...)):
+@app.post("/predict", 
+          summary="Prédiction d'identité de vache",
+          description="Prédit l'identité d'une vache à partir d'une seule image. L'image doit contenir un museau de vache visible.")
+async def predict(image: UploadFile = File(..., description="Une seule image de vache (formats supportés: JPG, PNG, etc.)")):
+    """Prédiction d'identité de vache à partir d'une seule image"""
     global database
+    
+    # Validation du type de fichier
+    if not image.content_type.startswith('image/'):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Le fichier doit être une image (jpg, png, etc.)"}
+        )
+    
+    # Validation de la taille du fichier (max 10MB)
+    max_size = 10 * 1024 * 1024  # 10MB
+    if hasattr(image, 'size') and image.size > max_size:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "La taille de l'image ne doit pas dépasser 10MB"}
+        )
+    
     filename_only = os.path.basename(image.filename)
     temp_path = f"temp_{filename_only}"
-    with open(temp_path, "wb") as buffer:
-        shutil.copyfileobj(image.file, buffer)
+    
+    try:
+        with open(temp_path, "wb") as buffer:
+            shutil.copyfileobj(image.file, buffer)
+    except Exception as e:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Erreur lors de la lecture du fichier: {str(e)}"}
+        )
 
-    img_cv = cv2.imread(temp_path)
-    os.remove(temp_path)
+    try:
+        img_cv = cv2.imread(temp_path)
+        if img_cv is None:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Impossible de lire l'image. Format non supporté."}
+            )
+    finally:
+        # Nettoyer le fichier temporaire même en cas d'erreur
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
     # Détection du museau
     muzzle_img = detect_muzzle(img_cv)
