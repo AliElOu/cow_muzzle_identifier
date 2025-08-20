@@ -207,15 +207,14 @@ marimo/_lsp/
 __marimo__/
 
 # Yolo Weight + pretrained models
-*.pt
 *.pth
 *.ckpt
 
 # Tensorflow models
 *.h5
-*.keras
 *.json
 *.ipynb
 *.jpg
 *.jpeg
 *.png
+*.keras
