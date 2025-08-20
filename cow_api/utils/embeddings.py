@@ -30,7 +30,7 @@ def get_embedding(img_tensor):
     return embedding_model.predict(img_tensor)[0]
 
 # Identifier
-def predict_identity(img_tensor, database, threshold=0.7):
+def predict_identity(img_tensor, database, threshold=0.9):
     # Vérifier si la base de données contient des embeddings
     if not database.get("embeddings") or len(database["embeddings"]) == 0:
         return "BASE_VIDE", 0.0
