@@ -12,12 +12,39 @@ import cv2
 import logging
 from dotenv import load_dotenv
 from datetime import datetime
+import sys
 
 # Charger les variables d'environnement
-load_dotenv()
+load_dotenv(override=True)
 
 # Configuration des logs
 logging.basicConfig(level=logging.INFO)
+
+# Debug: Vérifier les credentials
+logging.info(f"🔑 Access Key: {os.getenv('AWS_ACCESS_KEY_ID')}")
+logging.info(f"🌍 Region: {os.getenv('AWS_REGION')}")
+
+# Vérification critique de S3 au démarrage
+try:
+    logging.info("🔍 Vérification de la connectivité S3...")
+    
+    # Vérifier les variables d'environnement AWS
+    required_vars = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY']
+    missing_vars = [var for var in required_vars if not os.getenv(var)]
+    
+    if missing_vars:
+        raise Exception(f"Variables d'environnement manquantes: {', '.join(missing_vars)}")
+    
+    # Tester la connexion S3
+    s3_manager = S3Manager()
+    s3_manager.s3_client.head_bucket(Bucket=s3_manager.bucket_name)
+    
+    logging.info("✅ S3 accessible - démarrage de l'API")
+    
+except Exception as e:
+    logging.critical(f"❌ ERREUR S3: {e}")
+    logging.critical("🚫 L'API ne peut pas démarrer sans accès S3")
+    sys.exit(1)
 
 app = FastAPI()
 
@@ -34,8 +61,8 @@ app.add_middleware(
 database = load_database()
 logging.info(f"Base de données chargée avec {len(database.get('labels', []))} vaches")
 
-# Initialisation du gestionnaire S3
-s3_manager = S3Manager()
+# Initialisation du gestionnaire S3 (déjà vérifié au démarrage)
+# s3_manager déjà initialisé lors de la vérification
 
 # Créer les dossiers nécessaires pour la sauvegarde des prédictions
 os.makedirs("prediction_results", exist_ok=True)

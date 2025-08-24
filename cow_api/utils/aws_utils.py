@@ -4,29 +4,34 @@ import os
 from io import BytesIO
 from botocore.exceptions import ClientError
 import logging
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
 class S3Manager:
-    def __init__(self, bucket_name=None, region_name='us-east-1'):
+    def __init__(self, bucket_name=None, region_name=None):
         """
         Initialise le gestionnaire S3
         
         Args:
             bucket_name: Nom du bucket S3 (peut être défini via variable d'environnement AWS_S3_BUCKET)
-            region_name: Région AWS (défaut: us-east-1)
+            region_name: Région AWS (défaut: depuis env)
         """
-        self.bucket_name = bucket_name or os.getenv('AWS_S3_BUCKET', 'cow-muzzle-images')
-        self.region_name = region_name
+        # Forcer le rechargement des variables d'environnement
+        load_dotenv(override=True)
         
-        # Initialisation du client S3
+        self.bucket_name = bucket_name or os.getenv('AWS_S3_BUCKET', 'cow-muzzle-images')
+        self.region_name = region_name or os.getenv('AWS_REGION', 'us-east-1')
+        
+        # Initialisation du client S3 avec session explicite
         try:
-            self.s3_client = boto3.client(
-                's3',
-                region_name=self.region_name,
+            session = boto3.Session(
                 aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-                aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY')
+                aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+                region_name=self.region_name
             )
+            self.s3_client = session.client('s3')
+            logger.info(f"S3Manager initialisé - Bucket: {self.bucket_name}, Région: {self.region_name}")
         except Exception as e:
             logger.error(f"Erreur lors de l'initialisation du client S3: {e}")
             raise

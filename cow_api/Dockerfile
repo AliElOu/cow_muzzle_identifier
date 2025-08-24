@@ -26,12 +26,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Créer les dossiers nécessaires
-RUN mkdir -p muzzle_images
+RUN mkdir -p muzzle_images prediction_results
 
 # Exposer le port
 EXPOSE 8000
 
-#CMD ["sleep", "infinity"]
+# CMD ["sleep", "infinity"]
 
 # Commande pour démarrer l'application
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
