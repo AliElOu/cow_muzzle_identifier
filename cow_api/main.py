@@ -230,13 +230,13 @@ async def predict(image: UploadFile = File(..., description="Une seule image de 
         })
     
     # Générer un nom de fichier unique avec timestamp
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]  # microseconds tronquées
-    muzzle_filename = f"prediction_{timestamp}_{filename_only}"
-    muzzle_save_path = os.path.join("prediction_results", muzzle_filename)
+    # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]  # microseconds tronquées
+    # muzzle_filename = f"prediction_{timestamp}_{filename_only}"
+    # muzzle_save_path = os.path.join("prediction_results", muzzle_filename)
     
-    # Sauvegarder l'image du museau détecté
-    cv2.imwrite(muzzle_save_path, muzzle_img)
-    logging.info(f"Museau détecté sauvegardé: {muzzle_save_path}")
+    # # Sauvegarder l'image du museau détecté
+    # cv2.imwrite(muzzle_save_path, muzzle_img)
+    # logging.info(f"Museau détecté sauvegardé: {muzzle_save_path}")
     
     img_tensor = load_and_preprocess_image(muzzle_img)
     label, score = predict_identity(img_tensor, database)
@@ -247,7 +247,7 @@ async def predict(image: UploadFile = File(..., description="Une seule image de 
             "prediction": "BASE DE DONNÉES VIDE",
             "score": 0.0,
             "muzzle_saved": True,
-            "muzzle_save_path": muzzle_save_path,
+            # "muzzle_save_path": muzzle_save_path,
             "original_filename": filename_only,
             "message": "Aucune vache enregistrée dans la base de données. Ajoutez des vaches avec /add-cow avant de faire des prédictions.",
             "total_cows_in_database": len(database.get("labels", []))
@@ -257,7 +257,7 @@ async def predict(image: UploadFile = File(..., description="Une seule image de 
         "prediction": label,
         "score": float(score),
         "muzzle_saved": True,
-        "muzzle_save_path": muzzle_save_path,
+        # "muzzle_save_path": muzzle_save_path,
         "original_filename": filename_only,
         "total_cows_in_database": len(database.get("labels", []))
     })
@@ -498,5 +498,5 @@ if __name__ == "__main__":
         "main:app",
         host="0.0.0.0",
         port=8000,
-        reload=True
+        reload=False
     )
